@@ -1,0 +1,255 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.utils import resample
+from imblearn.over_sampling import SMOTE
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import LabelEncoder
+from imblearn.combine import SMOTETomek
+from collections import Counter
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Embedding, Bidirectional, LSTM, Dense, Dropout
+import seaborn as sns
+from transformers import BertTokenizer, TFBertModel
+from sklearn.utils import class_weight
+import ssl
+ssl._create_default_https_context=ssl._create_unverified_context
+import os
+os.environ['CURL_CA_BUNDLE']=''
+
+csv_path = "D:/latestdata.csv"
+df = pd.read_csv(csv_path)
+df=df.iloc[:150000]
+columns_to_drop = ["ID", "city","geo_resolution","chronic_disease","lives_in_Wuhan","date_onset_symptoms","date_admission_hospital","date_confirmation","travel_history_dates","travel_history_location","reported_market_exposure","additional_information","sequence_available","date_death_or_discharge","notes_for_discussion","location","admin1","admin2","admin3","country_new","admin_id","data_moderator_initials","travel_history_binary"]
+df = df.drop(columns=columns_to_drop)
+df.head()
+
+false_values = df["chronic_disease_binary"].loc[df["chronic_disease_binary"] == False].shape[0]
+true_values = df["chronic_disease_binary"].loc[df["chronic_disease_binary"] == True].shape[0]
+plt.bar(["false","true"], [false_values,true_values])
+plt.annotate("Number of false values: {}".format(false_values), (0, false_values), xytext=(10, 10), textcoords="offset points")
+
+plt.show()
+
+df.dropna(subset=['outcome'],inplace=True)
+df
+df['age']=df['age'].replace(np.NaN,0)
+
+
+#df['age']=df['age'].replace(,0,inplace=True)
+
+def calculate_average_age(age_range):
+    if isinstance(age_range, str) and '-' in age_range:
+        ages = age_range.split('-')
+        return (int(ages[0]) + int(ages[1])) // 2
+    else:
+        return float(age_range) if pd.notna(age_range) else np.nan
+
+# Convert range-based ages to average ages
+df['age'] = df['age'].astype(str).apply(calculate_average_age)
+
+# Calculate a reasonable default age (median of non-NaN ages)
+non_nan_ages = df['age'][df['age'].notna()]
+
+if not non_nan_ages.empty:
+    default_age = non_nan_ages.median()
+    df['age'].fillna(int(default_age), inplace=True)
+# Fill missing values in 'province' and 'sex' columns
+df['province'].fillna(method='bfill', inplace=True)
+df['sex'].fillna(method='ffill', inplace=True)
+
+# Print the first few rows of the updated DataFrame
+df['age']
+df['outcome'].replace("stable condition","discharged",inplace=True)
+df['outcome'].replace("discharge","discharged",inplace=True)
+
+df['outcome'].replace("recovered","discharged",inplace=True)
+df['outcome'].replace("Recovered","discharged",inplace=True)
+df['outcome'].replace("stable","discharged",inplace=True)
+df['outcome'].replace("unstable","death",inplace=True)
+df['outcome'].replace("unstable condition","death",inplace=True)
+df['outcome'].replace("Discharged","discharged",inplace=True)
+df['outcome'].replace("died","death",inplace=True)
+df['outcome'].replace("deceased","death",inplace=True)
+df['outcome'].replace("Deceased","death",inplace=True)
+df['outcome'].replace("Hospitalized","discharged",inplace=True)
+df['outcome'].replace("Hospitalized","discharged",inplace=True)
+df['sex'].replace('male',1,inplace=True);
+df['sex'].replace('female',0,inplace=True);
+df['symptoms'].fillna(method='bfill', inplace=True)
+df['symptoms'].fillna(method='ffill', inplace=True)
+df['outcome'].replace("discharged",1,inplace=True)
+df['outcome'].replace("death",0,inplace=True)
+
+
+discharge_values = df["outcome"].loc[df["outcome"] == 1].shape[0]
+death_values = df["outcome"].loc[df["outcome"] == 0].shape[0]
+plt.bar(["discharged","death"], [discharge_values,death_values])
+
+plt.annotate("Number of discharge values: {}".format(discharge_values), (0, discharge_values), xytext=(10, 10), textcoords="offset points")
+plt.annotate("Number of death values: {}".format(death_values), (0, death_values), xytext=(20,20), textcoords="offset points")
+
+plt.show()
+df_majority = df[df['outcome'] == 1]
+df_minority = df[df['outcome'] == 0]
+plt.figure(figsize=(8, 6))
+
+df_minority_upsampled = resample(df_minority,
+                                 replace=True,  
+                                 n_samples=len(df_majority), 
+                                 random_state=42)
+
+df_upsampled = pd.concat([df_majority, df_minority_upsampled])
+
+# Split data into features (X) and labels (y)
+X = df_upsampled[['symptoms', 'age', 'chronic_disease_binary']].values
+y = df_upsampled['outcome'].values
+sns.countplot(x='outcome', data=df_upsampled)
+print(df_upsampled)
+plt.xlabel('Label')
+plt.ylabel('Count')
+plt.title('Distribution of Labels')
+
+# Show the plot
+plt.show()
+
+X_train, X_test, y_train, y_test =train_test_split(X, y, test_size=0.3, random_state=42)
+max_length = 128
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+X_train_encoded = tokenizer.batch_encode_plus(
+    list(X_train[:, 0]),  # Assuming the symptom descriptions are in the first column of X_train
+    add_special_tokens=True,
+    max_length=max_length,
+    return_attention_mask=True,
+    return_tensors='tf',
+    padding='max_length',
+    truncation=True
+)
+X_test_encoded = tokenizer.batch_encode_plus(
+    list(X_test[:, 0]),  # Assuming the symptom descriptions are in the first column of X_test
+    add_special_tokens=True,
+    max_length=max_length,
+    return_attention_mask=True,
+    return_tensors='tf',
+    padding='max_length',
+    truncation=True
+)
+
+from tensorflow.keras.layers import Bidirectional, LSTM, Embedding, Dropout, Dense
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input
+import tensorflow as tf
+from sklearn.utils import class_weight
+from transformers import BertTokenizer
+
+# Define your model architecture
+max_length = 128
+embedding_dim = 100
+lstm_units = 128
+
+input_layer = Input(shape=(max_length,))
+embedding_layer = Embedding(input_dim=len(tokenizer.get_vocab()), output_dim=embedding_dim, input_length=max_length)(input_layer)
+bi_lstm_layer = Bidirectional(LSTM(lstm_units))(embedding_layer)
+dropout_layer = Dropout(0.5)(bi_lstm_layer)
+output_layer = Dense(1, activation='sigmoid')(dropout_layer)
+
+bi_lstm_model = Model(inputs=input_layer, outputs=output_layer)
+
+bi_lstm_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+# Assuming you've already prepared X_train_encoded and y_train
+# Ensure X_train_encoded['input_ids'] is of shape (batch_size, max_length)
+# and y_train is of shape (batch_size,)
+
+class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+class_weight_dict = {0: class_weights[0], 1: class_weights[1]}
+
+# Train the model
+bi_lstm_model.fit(X_train_encoded['input_ids'], y_train, epochs=10, batch_size=64)
+bi_lstm_features_train = bi_lstm_model.predict(X_train_encoded['input_ids'])
+
+bi_lstm_features_test = bi_lstm_model.predict(X_test_encoded['input_ids'])
+from sklearn.ensemble import RandomForestClassifier
+
+rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+
+rf_classifier.fit(bi_lstm_features_train, y_train)
+rf_predictions = rf_classifier.predict(bi_lstm_features_test)
+
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+# Assuming you have your model and rf_predictions
+# Ensure y_test and binary_rf_predictions have the same shape
+# Ensure y_test contains binary labels (0 or 1)
+
+# Convert rf_predictions to int
+rf_predictions = rf_predictions.astype(int)
+
+# Ensure y_test contains binary labels
+y_test = y_test.astype(int)
+
+accuracy = accuracy_score(y_test, rf_predictions)
+print(f"Accuracy: {accuracy}")
+
+print(classification_report(y_test, rf_predictions))
+print(confusion_matrix(y_test, rf_predictions))
+
+import numpy as np
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+tsne = TSNE(n_components=1)
+tsne_features = tsne.fit_transform(bi_lstm_features_test)
+plt.figure(figsize=(8, 6))
+plt.scatter(tsne_features[:, 0], y_test, s=20)
+
+plt.legend(["Label 0", "Label 1"], title="Label")
+
+plt.title("t-SNE Plot of BiLSTM and Random Forest Features (Reduced Components)")
+plt.xlabel("t-SNE Component 1")
+plt.ylabel("Label")
+
+plt.show()
+
+input_age = 70  
+input_chronic_disease = 1 
+input_symptoms = "fever,fatigue,cold"  
+
+
+if input_age is None or input_age < 0:
+    input_age = default_age  
+
+
+if input_chronic_disease not in (0, 1):
+    input_chronic_disease = 0  
+
+
+input_symptoms_encoded = tokenizer.encode_plus(
+    input_symptoms,
+    add_special_tokens=True,
+    max_length=max_length,
+    return_attention_mask=True,
+    return_tensors='tf',
+    padding='max_length',
+    truncation=True
+)
+
+
+input_features = {
+    'input_8': input_symptoms_encoded['input_ids'],  
+    'input_9': np.array([input_age], dtype=np.float32),  
+    'input_10': np.array([input_chronic_disease], dtype=np.float32), 
+}
+
+bi_lstm_prediction = bi_lstm_model.predict(input_features)
+
+bi_lstm_prediction = int(bi_lstm_prediction[0] >= 0.5)
+
+rf_prediction = rf_classifier.predict(np.array([bi_lstm_prediction]).reshape(1, -1))[0]
+
+if rf_prediction == 1:
+    outcome = "discharged"
+else:
+    outcome = "death"
+
+print("Predicted Outcome:", outcome)
